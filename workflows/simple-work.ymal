@@ -1,0 +1,22 @@
+name: Simple File Check
+on:
+  push:
+    branches:
+      - master
+jobs:
+  check-file:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Check README content
+        run: |
+          if grep -q "Proyecto" README.md; then
+            echo "¡El archivo README contiene la palabra 'Proyecto'!"
+          else
+            echo "Error: La palabra 'Proyecto' no está en README.md"
+            exit 1
+          fi
+      - name: Print custom message
+        run: echo "¡Flujo ejecutado con éxito en $(date)!"
+
