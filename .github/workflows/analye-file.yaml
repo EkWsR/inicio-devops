@@ -1,0 +1,26 @@
+name: Analyze File Content
+on:
+  push:
+    branches:
+      - master
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Create analysis script
+        run: |
+          echo '#!/bin/bash
+          echo "Analizando README.md..."
+          echo "Número de líneas: $(wc -l < README.md)"
+          echo "Número de palabras: $(wc -w < README.md)"
+          if grep -qi "devops" README.md; then
+            echo "✓ La palabra 'DevOps' está presente"
+          else
+            echo "✗ La palabra 'DevOps' no está presente"
+          fi
+          ' > analyze.sh
+          chmod +x analyze.sh
+      - name: Run analysis script
+        run: ./analyze.sh

@@ -1,0 +1,34 @@
+name: Validate Repository Structure
+on:
+  push:
+    branches:
+      - main
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Check for required files
+        run: |
+          echo "Verificando estructura del repositorio..."
+          if [ -f README.md ]; then
+            echo "✓ README.md encontrado"
+          else
+            echo "✗ Error: README.md no encontrado"
+            exit 1
+          fi
+          if [ -d docs ]; then
+            echo "✓ Carpeta docs encontrada"
+          else
+            echo "✗ Error: Carpeta docs no encontrada"
+            exit 1
+          fi
+      - name: Create output file
+        run: |
+          echo "Workflow ejecutado el $(date)" > output.txt
+      - name: Upload output file
+        uses: actions/upload-artifact@v3
+        with:
+          name: workflow-output
+          path: output.txt
