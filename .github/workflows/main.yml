@@ -1,0 +1,196 @@
+name: CI/CD Python App for DigitalOcean
+
+# Disparadores del pipeline
+on:
+  push:
+    branches:
+      - main.tf
+      - develop
+  pull_request:
+    branches:
+      - main.tf
+      - develop
+  workflow_dispatch: # Ejecución manual
+
+# Variables globales
+env:
+  APP_NAME: "my-python-app"
+  TEST_ENV: "test"
+  PROD_ENV: "production"
+  REGISTRY: "registry.digitalocean.com" # Registro de contenedores de DigitalOcean
+  IMAGE_NAME: "${{ github.repository_owner }}/${{ env.APP_NAME }}"
+
+jobs:
+  # Job 1: Análisis de código (Linting)
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11' # Ajusta según tu versión de Python
+
+      - name: Install linter
+        run: pip install flake8
+
+      - name: Run linter
+        run: flake8 . --max-line-length=88 --extend-ignore=E203
+
+  # Job 2: Ejecución de tests
+  test:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest --junitxml=test-results/report.xml
+        env:
+          TEST_ENV: ${{ env.TEST_ENV }}
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results/
+
+  # Job 3: Análisis de seguridad
+  security:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install safety
+        run: pip install safety
+
+      - name: Run security scan
+        run: safety check -r requirements.txt --full-report
+        # Otras herramientas: bandit (pip install bandit; bandit -r .)
+
+      - name: Upload security report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: safety_report.json # Ajusta según la herramienta usada
+
+  # Job 4: Construcción de la imagen Docker
+  build:
+    runs-on: ubuntu-latest
+    needs: [test, security]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to DigitalOcean Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DO_REGISTRY_TOKEN }}
+          password: ${{ secrets.DO_REGISTRY_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+  # Job 5: Despliegue a entorno de pruebas (DigitalOcean)
+  deploy-test:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/develop'
+    environment: test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install DigitalOcean CLI
+        run: |
+          curl -sL https://github.com/digitalocean/doctl/releases/latest/download/doctl.tar.gz | tar -xzv
+          sudo mv doctl /usr/local/bin/
+
+      - name: Authenticate with DigitalOcean
+        env:
+          DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+        run: doctl auth init -t "$DIGITALOCEAN_ACCESS_TOKEN"
+
+      - name: Deploy to DigitalOcean App Platform (Test)
+        run: |
+          doctl apps update ${{ secrets.DO_APP_ID_TEST }} \
+            --spec .do/app.yaml \
+            --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+        # Alternativa para Droplet: usa SSH para actualizar contenedores
+
+  # Job 6: Despliegue a producción (DigitalOcean)
+  deploy-prod:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main.tf'
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install DigitalOcean CLI
+        run: |
+          curl -sL https://github.com/digitalocean/doctl/releases/latest/download/doctl.tar.gz | tar -xzv
+          sudo mv doctl /usr/local/bin/
+
+      - name: Authenticate with DigitalOcean
+        env:
+          DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+        run: doctl auth init -t "$DIGITALOCEAN_ACCESS_TOKEN"
+
+      - name: Deploy to DigitalOcean App Platform (Production)
+        run: |
+          doctl apps update ${{ secrets.DO_APP_ID_PROD }} \
+            --spec .do/app.yaml \
+            --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+  # Job 7: Notificaciones
+  notify:
+    runs-on: ubuntu-latest
+    needs: [deploy-test, deploy-prod]
+    if: always()
+    steps:
+      - name: Notify Slack on Success
+        if: ${{ needs.deploy-test.result == 'success' || needs.deploy-prod.result == 'success' }}
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: |
+          curl -X POST -H 'Content-Type: application/json' \
+            --data '{"text":"Deployment successful for ${{ env.APP_NAME }} to ${{ github.ref_name }}"}' \
+            ${{ env.SLACK_WEBHOOK }}
+
+      - name: Notify Slack on Failure
+        if: ${{ needs.deploy-test.result != 'success' || needs.deploy-prod.result != 'success' }}
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: |
+          curl -X POST -H 'Content-Type: application/json' \
+            --data '{"text":"Deployment failed for ${{ env.APP_NAME }} to ${{ github.ref_name }}"}' \
+            ${{ env.SLACK_WEBHOOK }}
