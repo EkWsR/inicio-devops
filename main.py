@@ -5,6 +5,9 @@ import sys
 
 def backup_files(source_dir, target_dir):
     try:
+        if not os.path.exists(source_dir):
+            print("Error: El directorio fuente no existe.")
+            return False
         if not os.path.exists(target_dir):
             os.makedirs(target_dir)
         for filename in os.listdir(source_dir):
